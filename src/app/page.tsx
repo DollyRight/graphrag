@@ -1,65 +1,133 @@
-import Image from "next/image";
+"use client";
+import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import { User, Bot, Send } from "lucide-react";
 
-export default function Home() {
+export default function ChatPage() {
+  const [input, setInput] = useState("");
+  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 自动滚动到底部
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
+
+    const userMsg = { role: "user", content: input };
+    setMessages((prev) => [...prev, userMsg]);
+    setInput("");
+    setIsLoading(true);
+
+    // 预设一个空的 AI 回答消息用于占位
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        body: JSON.stringify({ messages: [...messages, userMsg] }),
+      });
+
+      if (!res.body) return;
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let done = false;
+      let accumulatedContent = "";
+
+      // 读取流
+      while (!done) {
+        const { value, done: doneReading } = await reader.read();
+        done = doneReading;
+        const chunkValue = decoder.decode(value);
+        accumulatedContent += chunkValue;
+
+        // 实时更新最后一条消息（即 AI 的回答）
+        setMessages((prev) => {
+          const newMsgs = [...prev];
+          newMsgs[newMsgs.length - 1].content = accumulatedContent;
+          return newMsgs;
+        });
+      }
+    } catch (error) {
+      console.error("Stream error:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <main className="flex flex-col h-screen bg-gray-50">
+      {/* 头部 */}
+      <header className="p-4 bg-white border-b text-center font-bold shadow-sm">
+        Qwen Graph Assistant
+      </header>
+
+      {/* 聊天内容区 */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-6">
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            <div
+              className={`flex max-w-[80%] ${
+                m.role === "user" ? "flex-row-reverse" : "flex-row"
+              } gap-3`}
+            >
+              {/* 头像 */}
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                m.role === "user" ? "bg-blue-500" : "bg-emerald-500"
+              }`}>
+                {m.role === "user" ? <User size={18} className="text-white" /> : <Bot size={18} className="text-white" />}
+              </div>
+
+              {/* 气泡 */}
+              <div className={`p-3 rounded-2xl shadow-sm ${
+                m.role === "user" 
+                  ? "bg-blue-600 text-white rounded-tr-none" 
+                  : "bg-white text-gray-800 border border-gray-200 rounded-tl-none"
+              }`}>
+                <article className="prose prose-sm max-w-none break-words overflow-hidden">
+                  <ReactMarkdown>{m.content}</ReactMarkdown>
+                  {m.role === 'assistant' && m.content === '' && (
+                    <span className="animate-pulse">▍</span>
+                  )}
+                </article>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 输入框区 */}
+      <div className="p-4 bg-white border-t">
+        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto flex gap-2">
+          <input
+            className="flex-1 border border-gray-300 p-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-gray-700"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="输入您的问题..."
+            disabled={isLoading}
+          />
+          <button
+            type="submit"
+            disabled={isLoading}
+            className={`px-5 py-3 rounded-xl flex items-center gap-2 font-medium transition-all ${
+              isLoading ? "bg-gray-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700 text-white"
+            }`}
           >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+            <Send size={18} />
+            {isLoading ? "生成中..." : "发送"}
+          </button>
+        </form>
+      </div>
+    </main>
   );
 }
