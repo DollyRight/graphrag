@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { uploadAndIndex, getChatList, getChatMessages, saveMessageAction } from "@/app/actions/chat";
-import { Upload, Send, FileText, Loader2, MessageSquare, Plus, Copy, Edit3, Check, X, Share2 } from "lucide-react";
+import { Upload, Send, FileText, Loader2, MessageSquare, Plus, Copy, Edit3, Check, X, Share2, Database, FileUp } from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -10,13 +10,16 @@ import 'katex/dist/katex.min.css';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import Sidebar from "../components/Sidebar";
+import { getKnowledgeBases } from "../actions/knowledge";
 export default function Home() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
   // 从 URL 获取 id: http://localhost:3000/chat?id=xxxx
   const chatIdFromUrl = searchParams.get("id");
-  const [loading, setLoading] = useState(false);
+  // const [loading, setLoading] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false); // 专门用于 AI 回答
+  const [uploadLoading, setUploadLoading] = useState(false); // 专门用于文件上传
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
   const [input, setInput] = useState("");
   const [uploadStatus, setUploadStatus] = useState("");
@@ -28,7 +31,18 @@ export default function Home() {
 
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editContent, setEditContent] = useState("");
+  const [selectedKbId, setSelectedKbId] = useState<string>("");
+  const [kbList, setKbList] = useState<any[]>([]);
 
+  // 初始化获取知识库列表
+  useEffect(() => {
+    const fetchKBs = async () => {
+      const list = await getKnowledgeBases();
+      setKbList(list);
+      if (list.length > 0) setSelectedKbId(list[0]._id); // 默认选第一个
+    };
+    fetchKBs();
+  }, []);
   // --- 新增：复制功能 ---
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -61,37 +75,49 @@ export default function Home() {
     console.log("消息已更新:", editContent);
   };
 
+
+
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.[0]) return;
-    setLoading(true);
-    setUploadStatus("正在解析并构建图谱 (可能需要几分钟)...");
+    if (!e.target.files?.[0] || !selectedKbId) return;
+
+    setUploadLoading(true); 
+    setUploadStatus("正在解析并构建图谱...");
 
     const formData = new FormData();
     formData.append("file", e.target.files[0]);
+    formData.append("kbId", selectedKbId);
 
-    const res = await uploadAndIndex(formData);
-    setLoading(false);
-
-    if (res.error) {
-      setUploadStatus(`错误: ${res.error}`);
-    } else {
-      setUploadStatus(`成功! ${res.message}`);
+    try {
+      const res = await uploadAndIndex(formData);
+      if (res.error) {
+        setUploadStatus(`错误: ${res.error}`);
+      } else {
+        setUploadStatus(`成功! ${res.message}`);
+        // 3秒后自动清除成功提示
+        setTimeout(() => setUploadStatus(""), 3000);
+      }
+    } catch (err) {
+      setUploadStatus("上传失败，请稍后再试");
+    } finally {
+      setUploadLoading(false); // 关闭上传 Loading
     }
   };
 
   // 1. 核心：监听 URL 参数变化
   useEffect(() => {
-    if (chatIdFromUrl) {
+    if (chatIdFromUrl && !chatLoading) {
       loadChatData(chatIdFromUrl);
     } else {
       // 如果 URL 没有 id，说明是新对话
       handleNewChat();
     }
+
   }, [chatIdFromUrl]); // 只要 id 变了，就执行
 
   // 2. 加载指定对话数据
   const loadChatData = async (id: string) => {
-    setLoading(true);
+    setChatLoading(true);
     setCurrentChatId(id);
     try {
       const msgs = await getChatMessages(id);
@@ -99,14 +125,11 @@ export default function Home() {
     } catch (error) {
       console.error("加载失败", error);
     } finally {
-      setLoading(false);
+      setChatLoading(false);
     }
   };
 
-  // 初始化获取侧边栏
-  useEffect(() => {
-    refreshHistory();
-  }, []);
+
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -114,55 +137,37 @@ export default function Home() {
     }
   }, [messages]); // 每当消息变化时触发
 
-  const refreshHistory = async () => {
-    const list = await getChatList();
-    console.log("------------------------------", list)
-    setHistory(list);
-  };
-
-  // const handleSelectChat = async (id: string) => {
-  //   if (loading) return;
-  //   setCurrentChatId(id);
-  //   const msgs = await getChatMessages(id);
-  //   setMessages(msgs);
-  // };
-  const handleSelectChat = (id: string) => {
-    // 跳转到新的 URL，Home 页面会通过监听参数自动加载数据
-    router.push(`/chat?id=${id}`);
-  };
 
   const handleNewChat = () => {
     setCurrentChatId(null);
     setMessages([]);
     // 如果当前 URL 有 id 但用户点了新建，则清空 URL
     if (searchParams.get("id")) {
+
       router.push("/chat");
     }
   };
 
+
   const handleSend = async () => {
-    if (!input.trim() || loading) return;
+    if (!input.trim() || chatLoading) return;
     const userText = input;
     const userMsg = { role: "user", content: userText };
 
-    // 保存消息
-    const activeChatId = await saveMessageAction({
-      chatId: currentChatId || undefined,
-      role: "user",
-      content: userText,
-    });
-
-    // 如果是新开的对话，跳转到带 ID 的 URL
-    if (!currentChatId) {
-      router.push(`/chat?id=${activeChatId}`);
-      // 这里的 useEffect [chatIdFromUrl] 会负责刷新消息列表
-    }
-
-    setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "" }]);
     setInput("");
-    setLoading(true);
+    setChatLoading(true);
+
+    setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "..." }]);
 
     try {
+
+      const activeChatId = await saveMessageAction({
+        chatId: currentChatId || undefined,
+        role: "user",
+        content: userText,
+      });
+
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -182,27 +187,41 @@ export default function Home() {
         const chunk = decoder.decode(value);
         accumulated += chunk;
 
+
         setMessages((prev) => {
           const updated = [...prev];
-          updated[updated.length - 1].content = accumulated;
-          return updated;
+          if (updated.length > 0) {
+            updated[updated.length - 1] = {
+              role: "assistant",
+              content: accumulated
+            };
+          }
+          return [...updated]; // 确保返回新引用
         });
       }
 
-      // 2. 流结束后，将完整的回复存入数据库
+
       await saveMessageAction({
         chatId: activeChatId,
         role: "assistant",
         content: accumulated,
       });
 
+
+      if (!currentChatId) {
+        window.history.replaceState(null, '', `/chat?id=${activeChatId}`);
+
+      }
+      router.refresh();
+
+
     } catch (err) {
       console.error("Streaming error:", err);
+      setMessages(prev => [...prev.slice(0, -1), { role: "assistant", content: "抱歉，出错了。" }]);
     } finally {
-      setLoading(false);
+      setChatLoading(false);
     }
   };
-
 
 
 
@@ -244,9 +263,7 @@ export default function Home() {
                     </div>
                   ) : (
                     <>
-                      {/* <article className={`prose prose-sm max-w-none break-words ${msg.role === "user" ? "prose-invert" : ""}`}>
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                      </article> */}
+
                       <article className={`prose prose-sm max-w-none break-words ${msg.role === "user" ? "prose-invert" : ""}`}>
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm, remarkMath]}
@@ -287,50 +304,107 @@ export default function Home() {
         {/* 底部输入框区域 - 集成了上传功能 */}
         <div className="p-4 bg-white border-t">
           <div className="max-w-4xl mx-auto">
-            {/* 上传状态提示语 - 仅在有状态时显示 */}
-            {uploadStatus && (
-              <div className="mb-2 px-2 flex items-center gap-2 text-xs font-medium text-blue-600 animate-pulse">
-                {loading && <Loader2 className="w-3 h-3 animate-spin" />}
-                {uploadStatus}
+            <div className="relative w-full max-w-4xl mx-auto px-4 pb-6">
+
+
+              <div className="relative flex flex-col bg-white border border-slate-200 rounded-2xl shadow-xl shadow-slate-200/50 transition-all focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-500/10">
+
+                {/* 顶部工具栏：知识库选择与文件上传 */}
+                <div className="flex items-center gap-2 p-2 border-b border-slate-50">
+                  <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-100">
+                    <Database className="w-3.5 h-3.5 text-slate-400" />
+                    <select
+                      value={selectedKbId}
+                      onChange={(e) => setSelectedKbId(e.target.value)}
+                      className="text-xs font-bold bg-transparent text-slate-600 outline-none cursor-pointer hover:text-blue-600 transition-colors"
+                    >
+                      {kbList.length > 0 ? (
+                        kbList.map(kb => (
+                          <option key={kb._id} value={kb._id}>{kb.name}</option>
+                        ))
+                      ) : (
+                        <option value="">请先创建知识库</option>
+                      )}
+                    </select>
+                  </div>
+
+
+                  <div className="h-4 w-px bg-slate-200 mx-1" />
+
+                  <label className={`
+                      flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer
+                      ${uploadLoading ? 'bg-slate-50 text-slate-400' : 'bg-white text-slate-600 hover:bg-blue-50 hover:text-blue-600 border border-slate-200 shadow-sm'}
+                    `}>
+                    {uploadLoading ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+                    ) : (
+                      <FileUp className="w-3.5 h-3.5" />
+                    )}
+                    <span>{uploadLoading ? "处理中" : "添加文档"}</span>
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={handleUpload}
+                      accept=".pdf,.txt,.md"
+                      disabled={uploadLoading || !selectedKbId}
+                    />
+                  </label>
+                  {/* 上传状态提示语 - 仅在有状态时显示 */}
+                  {uploadStatus && (
+                    <div className=" px-2 flex items-center gap-2 text-xs font-medium text-blue-600 animate-pulse">
+                      {uploadLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+                      {uploadStatus}
+                    </div>
+                  )}
+                </div>
+
+                {/* 输入区域 */}
+                <div className="relative flex items-center">
+                  <textarea
+                    rows={1}
+                    className="w-full bg-transparent pl-4 pr-14 py-4 resize-none outline-none text-slate-700 placeholder:text-slate-400 min-h-[56px] max-h-32 text-sm lg:text-base
+                      /* --- 滚动条优化开始 --- */
+                      /* 1. 兼容 Firefox */
+                      scrollbar-thin 
+                      scrollbar-thumb-slate-200 
+                      hover:scrollbar-thumb-slate-300
+                      
+                      /* 2. 兼容 Chrome/Safari (高度自定义) */
+                      [&::-webkit-scrollbar]:w-1.5           /* 极细宽度 */
+                      [&::-webkit-scrollbar-track]:bg-transparent 
+                      [&::-webkit-scrollbar-thumb]:bg-slate-200 
+                      [&::-webkit-scrollbar-thumb]:rounded-full
+                      hover:[&::-webkit-scrollbar-thumb]:bg-slate-300
+                      /* --- 滚动条优化结束 --- */"
+                    placeholder={chatLoading ? "AI 正在思考中..." : "在此输入关于飞机的专业问题..."}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                    disabled={chatLoading}
+                  />
+
+                  {/* 发送按钮：采用圆形悬浮设计 */}
+                  <button
+                    onClick={handleSend}
+                    disabled={chatLoading || !input.trim()}
+                    className={`
+                      absolute right-3 p-2.5 rounded-xl transition-all duration-300
+                      ${input.trim() && !chatLoading
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-200 hover:bg-blue-700 hover:-translate-y-0.5'
+                        : 'bg-slate-100 text-slate-400 cursor-not-allowed'}
+                    `}
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-            )}
 
-            <div className="relative flex items-center">
-              {/* 文件上传按钮 */}
-              <label className="absolute left-3 p-2 text-slate-400 hover:text-blue-600 cursor-pointer transition-colors z-10">
-                {loading ? (
-                  <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
-                ) : (
-                  <FileText className="w-5 h-5" />
-                )}
-                <input
-                  type="file"
-                  className="hidden"
-                  onChange={handleUpload}
-                  accept=".pdf,.txt,.md"
-                  disabled={loading}
-                />
-              </label>
-              {/* 输入框 */}
-              <input
-                className="w-full border border-slate-200 rounded-xl pl-12 pr-14 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 bg-slate-50 transition-all"
-                placeholder={loading ? "处理文件中..." : "输入你的问题..."}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                disabled={loading}
-              />
-
-              {/* 发送按钮 */}
-              <button
-                onClick={handleSend}
-                disabled={loading || !input.trim()}
-                className="absolute right-2 p-2 bg-slate-900 text-white rounded-lg hover:bg-blue-600 disabled:bg-slate-200 disabled:text-slate-400 transition-all"
-              >
-                <Send className="w-4 h-4" />
-              </button>
             </div>
-
           </div>
         </div>
       </main>

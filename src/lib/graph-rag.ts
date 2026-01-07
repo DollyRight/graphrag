@@ -9,7 +9,7 @@ import { RunnableSequence } from "@langchain/core/runnables";
 
 // --- A. 索引流程 (Indexing) ---
 
-export async function indexDocument(text: string, source: string) {
+export async function indexDocument(text: string, source: string, kbId: string, fileId: string) {
 
   // 1. 文本切分
   const splitter = new RecursiveCharacterTextSplitter({
@@ -22,6 +22,8 @@ export async function indexDocument(text: string, source: string) {
   // 2. 存入 Milvus (Vector 索引)
 
   await Milvus.fromDocuments(docs, embeddings, milvusConfig);
+
+
 
   // 手动构建一个 Prompt，要求返回纯 JSON
   const prompt = ChatPromptTemplate.fromTemplate(`
@@ -48,17 +50,31 @@ export async function indexDocument(text: string, source: string) {
       const parsed = JSON.parse(content);
 
       // 关键：构建符合 LangChain 定义的 GraphDocument
+      // const graphDocument = {
+      //   nodes: parsed.nodes.map((n: any) => ({
+      //     id: String(n.id), // 强制转为字符串
+      //     type: n.type || "Entity",
+      //     properties: {} // 先保持为空，避免嵌套属性报错
+      //   })),
+      //   relationships: parsed.relationships.map((r: any) => ({
+      //     source: { id: String(r.source), type: "Entity" },
+      //     target: { id: String(r.target), type: "Entity" },
+      //     type: r.type,
+      //     properties: {}
+      //   })),
+      //   source: doc
+      // };
       const graphDocument = {
         nodes: parsed.nodes.map((n: any) => ({
-          id: String(n.id), // 强制转为字符串
+          id: String(n.id),
           type: n.type || "Entity",
-          properties: {} // 先保持为空，避免嵌套属性报错
+          properties: { kbId, fileId } // 注入 ID 方便以后查询和删除
         })),
         relationships: parsed.relationships.map((r: any) => ({
           source: { id: String(r.source), type: "Entity" },
           target: { id: String(r.target), type: "Entity" },
           type: r.type,
-          properties: {}
+          properties: { kbId, fileId } // 注入 ID
         })),
         source: doc
       };
@@ -136,14 +152,41 @@ export async function graphRagQuery(question: string) {
   // 查找这些实体及其直接相连的关系（一阶邻居）
   let graphContext = "";
   try {
-    const cypherQuery = `
-      MATCH (n)-[r]->(m)
-      WHERE n.id IN $entities OR m.id IN $entities
-      RETURN n.id AS source, type(r) AS rel, m.id AS target
-      LIMIT 10
-    `;
+    // const cypherQuery = `
+    //   MATCH (n)-[r]->(m)
+    //   WHERE n.id IN $entities OR m.id IN $entities
+    //   RETURN n.id AS source, type(r) AS rel, m.id AS target
+    //   LIMIT 10
+    // `;
 
-    const graphResults: any[] = await graph.query(cypherQuery, { entities });
+    // const cypherQuery = `
+    //   MATCH (n)-[r]->(m)
+    //   WHERE (n.id IN $entities OR m.id IN $entities)
+    //     AND n.kbId = $kbId  // 关键：只查询当前知识库的数据
+    //   RETURN n.id AS source, type(r) AS rel, m.id AS target
+    //   LIMIT 10
+    // `;
+    // const cypherQuery = `
+    // MATCH (n)
+    // WHERE n.kbId = $kbId AND n.id IN $entities
+    // MATCH (n)-[r]-(m) // 这里的连接不带箭头，表示双向查询
+    // WHERE m.kbId = $kbId
+    // RETURN n.id AS source, type(r) AS rel, m.id AS target
+    // LIMIT 20
+    // `
+    const cypherQuery = `
+    MATCH (n)
+    WHERE n.kbId = $kbId AND n.id IN $entities
+    MATCH (n)-[r]-(m) 
+    WHERE m.kbId = $kbId
+    RETURN n.id AS source, type(r) AS rel, m.id AS target
+    LIMIT 20
+  `;
+    const graphResults: any[] = await graph.query(cypherQuery, {
+      entities,
+      kbId: "你的知识库ID" // ！！！必须确保这个值存在且正确
+    });
+    // const graphResults: any[] = await graph.query(cypherQuery, { entities });
 
     if (graphResults.length > 0) {
       graphContext = graphResults
@@ -156,33 +199,7 @@ export async function graphRagQuery(question: string) {
     console.error("Cypher 查询失败:", err);
     graphContext = "图谱查询出错。";
   }
-  // const template = `
-  // 你是一个智能助手。请基于以下上下文回答问题。
 
-  // --- 向量数据库检索到的文本 ---
-  // {vector_context}
-
-
-  // --- 知识图谱背景 ---
-  // (系统已连接知识图谱，请综合考虑实体间的潜在关系)
-
-  // 用户问题: {question}
-
-  // 请综合以上信息，给出详细、有逻辑的回答。
-  // `;
-  // const template = `
-  //   你是一个飞机制造的AI助手。请结合以下两种上下文信息回答用户的问题。
-  //   如果提供的上下文与用户问题无关，请直接忽略上下文，按照日常对话回答。
-  //   ### 1. 详细文本资料 (来自向量数据库)
-  //   {vector_context}
-
-  //   ### 2. 结构化逻辑关系 (来自知识图谱)
-  //   {graph_context}
-
-  //   ---
-  //   用户问题: {question}
-  //   请根据上述信息，给出条理清晰、准确的回答。如果图谱关系揭示了文档中分散的逻辑（如零件间的包含关系、工艺的先后顺序），请重点说明。
-  // `;
   const template = `
     你是一个深耕飞机制造领域的专家级 AI 助手。你的任务是基于提供的技术资料（非结构化文本）和知识图谱（结构化逻辑）来回答用户问题。
 
@@ -223,22 +240,6 @@ export async function graphRagQuery(question: string) {
 
   const prompt = ChatPromptTemplate.fromTemplate(template);
 
-  // const chain = RunnableSequence.from([
-  //   prompt,
-  //   llm,
-  //   new StringOutputParser(),
-  // ]);
-
-  // const response = await chain.invoke({
-  //   vector_context: vectorContext,
-  //   question: question,
-  // });
-  // const response = await chain.invoke({
-  //   vector_context: vectorContext,
-  //   graph_context: graphContext,
-  //   question: question,
-  // });
-  // return response;
   console.log("graphContext", graphContext)
   const chain = prompt.pipe(llm).pipe(new StringOutputParser());
   return await chain.stream({

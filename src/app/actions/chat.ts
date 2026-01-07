@@ -4,8 +4,8 @@ import { revalidatePath } from "next/cache";
 
 import { indexDocument, graphRagQuery } from "@/lib/graph-rag";
 import pdf from "pdf-parse";
-
-
+import connectDB from "@/lib/client";
+import Document from "@/models/Documents";
 const FIXED_USER_ID = "user_123";
 
 // 获取侧边栏列表
@@ -45,24 +45,66 @@ export async function saveMessageAction({
                 }
             }
         });
-        revalidatePath("/"); // 刷新页面缓存，让侧边栏更新
+        revalidatePath("/chat");
+
         return newChat.id;
     } else {
         // 存入已有会话
         await prisma.message.create({
             data: { chatId, role, content }
         });
+        revalidatePath("/chat");
         return chatId;
     }
 }
 
+/**
+ * 删除指定的会话及其所有消息
+ * @param chatId 会话ID
+ */
+export async function deleteChatAction(chatId: string) {
+    try {
+        // 验证该会话是否属于当前用户（安全校验）
+        const chat = await prisma.chat.findUnique({
+            where: { id: chatId },
+        });
 
+        if (!chat || chat.userId !== FIXED_USER_ID) {
+            throw new Error("无权删除此会话或会话不存在");
+        }
+
+        // 执行删除逻辑
+        // 注意：如果在 Prisma Schema 中配置了 onDelete: Cascade，
+        // 那么删除 chat 会自动删除关联的所有 messages。
+        await prisma.chat.delete({
+            where: { id: chatId },
+        });
+
+        // 刷新缓存，确保侧边栏列表更新
+        revalidatePath("/chat");
+        return { success: true };
+    } catch (error) {
+        console.error("删除会话失败:", error);
+        return { success: false, error: "删除失败，请稍后重试" };
+    }
+}
 
 export async function uploadAndIndex(formData: FormData) {
     const file = formData.get("file") as File;
-    if (!file) return { error: "No file uploaded" };
+    const kbId = formData.get("kbId") as string;
 
+    // if (!file) return { error: "No file uploaded" };
+    if (!file || !kbId) return { error: "Missing file or Knowledge Base ID" };
     try {
+        await connectDB();
+
+        // 1. 在 MongoDB 预创建文档记录
+        const docRecord = await Document.create({
+            kbId,
+            fileName: file.name,
+            status: "indexing",
+        });
+
         const buffer = Buffer.from(await file.arrayBuffer());
         let text = "";
 
@@ -75,7 +117,15 @@ export async function uploadAndIndex(formData: FormData) {
 
         if (!text.trim()) return { error: "Empty file" };
 
-        const result = await indexDocument(text, file.name);
+        // const result = await indexDocument(text, file.name);
+        // 2. 调用索引函数，传入 kbId 和 fileId
+        const result = await indexDocument(text, file.name, kbId, docRecord._id.toString());
+
+        // 3. 更新 MongoDB 状态
+        await Document.findByIdAndUpdate(docRecord._id, {
+            status: "completed",
+            neo4jStatus: true
+        });
         return { success: true, message: `Indexed ${result.chunks} chunks.` };
     } catch (error: any) {
         console.error(error);

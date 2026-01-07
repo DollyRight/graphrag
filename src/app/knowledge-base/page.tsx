@@ -69,6 +69,22 @@ export default function KBPage() {
     setFormData({ name: "", description: "" });
   };
 
+  // 1. 定义接口
+  interface KnowledgeBase {
+    _id: string;
+    name: string;
+    description?: string;
+    isDefault: boolean; // 确保包含此属性
+    // ... 其他你需要的属性
+  }
+
+  // 2. 在组件内部使用
+  const sortedKbs = (kbs as KnowledgeBase[]).sort((a, b) => {
+    // 现在 a 和 b 都是 KnowledgeBase 类型，不再报错
+    if (a.isDefault && !b.isDefault) return -1;
+    if (!a.isDefault && b.isDefault) return 1;
+    return 0;
+  });
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden">
       {/* 侧边栏保持不动 */}
@@ -96,7 +112,7 @@ export default function KBPage() {
         {/* 卡片列表容器：增加响应式内边距和最大宽度限制 */}
         <div className="px-8 pb-12 max-w-7xl">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-6">
-            {kbs.map((kb: any) => (
+            {sortedKbs.map((kb: any) => (
               <div
                 key={kb._id}
                 className="bg-white border border-slate-200/60 rounded-3xl p-6 hover:shadow-2xl hover:shadow-blue-500/5 hover:-translate-y-1 hover:border-blue-400/50 transition-all duration-300 group relative flex flex-col justify-between"
