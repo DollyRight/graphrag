@@ -5,6 +5,7 @@ import { Plus, FileText, Share2, Trash2, MessageSquare, ChevronLeft, ChevronRigh
 import { usePathname } from "next/navigation";
 import { getChatList, getChatMessages, } from "../actions/chat";
 import { useSearchParams, useRouter } from "next/navigation";
+import ChatHistoryItem from "./ChatHistroyItem";
 
 export default function Sidebar({ }) {
     const searchParams = useSearchParams();
@@ -56,12 +57,36 @@ export default function Sidebar({ }) {
     return (
         <aside className={`${isCollapsed ? "w-16" : "w-64"} bg-slate-900 flex flex-col text-slate-300 flex-shrink-0 transition-all duration-300 relative border-r border-slate-800 h-screen`}>
 
-            {/* 收起/展开按钮 */}
+            {/* 收起/展开按钮
             <button
                 onClick={() => setIsCollapsed(!isCollapsed)}
                 className="absolute -right-3 top-10 bg-slate-800 border border-slate-700 rounded-full p-1 text-slate-400 hover:text-white z-50 shadow-md"
             >
                 {isCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronLeft className="w-3 h-3" />}
+            </button> */}
+            {/* 收起/展开按钮 */}
+            <button
+                onClick={() => setIsCollapsed(!isCollapsed)}
+                className={`
+                    absolute -right-3 top-12 z-[60]
+                    flex h-6 w-6 items-center justify-center
+                    bg-slate-900 border border-slate-700/50 
+                    rounded-full text-slate-400 
+                    shadow-[0_2px_8px_rgba(0,0,0,0.3)]
+                    transition-all duration-300 ease-in-out
+                    hover:scale-110 hover:text-blue-400 hover:border-blue-500/50 hover:bg-slate-800
+                    active:scale-95
+                    group
+                `}
+            >
+                {isCollapsed ? (
+                    <ChevronRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+                ) : (
+                    <ChevronLeft className="w-3.5 h-3.5 transition-transform group-hover:-translate-x-0.5" />
+                )}
+
+                {/* 增加一个外圈扩散的光晕效果 */}
+                <span className="absolute inset-0 rounded-full animate-ping bg-blue-500/10 group-hover:block hidden" />
             </button>
             {/* 顶部：新建对话 */}
             <div className="p-4 border-b border-slate-800 space-y-1">
@@ -119,42 +144,20 @@ export default function Sidebar({ }) {
                 {!isCollapsed && (
                     <>
                         <p className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">历史对话记录</p>
-                        {/* <button
-                            onClick={handleNewChat}
-                            className={`w-full flex items-center justify-center gap-2 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition text-sm font-medium shadow-lg active:scale-95 ${isCollapsed ? "px-0" : ""}`}
-                        >
-                            <Plus className="w-4 h-4" />
-                            {!isCollapsed && <span>新建对话</span>}
-                        </button> */}
                     </>
 
                 )}
-                {/* <button
-                    onClick={handleNewChat}
-                    className={`w-full flex items-center justify-center gap-2 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition text-sm font-medium shadow-lg active:scale-95 ${isCollapsed ? "px-0" : ""}`}
-                >
-                    <Plus className="w-4 h-4" />
-                    {!isCollapsed && <span>新建对话</span>}
-                </button> */}
-                {history.map((chat) => {
-                    // 核心比对逻辑：当前 URL 的 id 是否等于这条记录的 id
-                    const isActive = currentIdFromUrl === chat.id;
 
-                    return (
-                        <button
-                            key={chat.id}
-                            onClick={() => handleSelectChat(chat.id)}
-                            className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition text-left group
-                                ${isActive
-                                    ? "bg-slate-800 text-white shadow-sm ring-slate-700"
-                                    : "hover:bg-slate-800 text-slate-400 hover:text-slate-200"
-                                }`}
-                        >
-                            <MessageSquare className={`w-4 h-4 flex-shrink-0 opacity-70 ${isActive ? 'text-blue-400' : ''}`} />
-                            {!isCollapsed && <span className="truncate">{chat.title}</span>}
-                        </button>
-                    );
-                })}
+                {history.map((chat) => (
+                    <ChatHistoryItem
+                        key={chat.id}
+                        chat={chat}
+                        isCollapsed={isCollapsed}
+                        isActive={currentIdFromUrl === chat.id}
+                        onSelect={handleSelectChat}
+                        refreshHistory={refreshHistory}
+                    />
+                ))}
             </div>
             <div className="p-2 border-t border-slate-800">
                 <button

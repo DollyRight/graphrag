@@ -31,6 +31,7 @@ export default function Home() {
 
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editContent, setEditContent] = useState("");
+
   const [selectedKbId, setSelectedKbId] = useState<string>("");
   const [kbList, setKbList] = useState<any[]>([]);
 
@@ -81,7 +82,7 @@ export default function Home() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0] || !selectedKbId) return;
 
-    setUploadLoading(true); 
+    setUploadLoading(true);
     setUploadStatus("正在解析并构建图谱...");
 
     const formData = new FormData();
@@ -148,46 +149,33 @@ export default function Home() {
     }
   };
 
-
   const handleSend = async () => {
     if (!input.trim() || chatLoading) return;
     const userText = input;
     const userMsg = { role: "user", content: userText };
-
     setInput("");
     setChatLoading(true);
-
     setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "..." }]);
-
     try {
-
       const activeChatId = await saveMessageAction({
         chatId: currentChatId || undefined,
         role: "user",
         content: userText,
       });
-
-
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: [...messages, userMsg] }),
+        body: JSON.stringify({ messages: [...messages, userMsg],kbId:selectedKbId }),
       });
-
       if (!response.body) throw new Error("No body");
-
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let accumulated = "";
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         const chunk = decoder.decode(value);
         accumulated += chunk;
-
-
         setMessages((prev) => {
           const updated = [...prev];
           if (updated.length > 0) {
@@ -199,8 +187,6 @@ export default function Home() {
           return [...updated]; // 确保返回新引用
         });
       }
-
-
       await saveMessageAction({
         chatId: activeChatId,
         role: "assistant",

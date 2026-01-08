@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { indexDocument, graphRagQuery } from "@/lib/graph-rag";
 import pdf from "pdf-parse";
-import connectDB from "@/lib/client";
+import {connectDB} from "@/lib/client";
 import Document from "@/models/Documents";
 const FIXED_USER_ID = "user_123";
 
@@ -89,6 +89,32 @@ export async function deleteChatAction(chatId: string) {
     }
 }
 
+/**
+ * 重命名会话标题
+ */
+export async function updateChatTitleAction(chatId: string, newTitle: string) {
+    try {
+        const chat = await prisma.chat.findUnique({
+            where: { id: chatId },
+        });
+
+        if (!chat || chat.userId !== FIXED_USER_ID) {
+            throw new Error("无权操作或会话不存在");
+        }
+
+        await prisma.chat.update({
+            where: { id: chatId },
+            data: { title: newTitle }
+        });
+
+        revalidatePath("/chat");
+        return { success: true };
+    } catch (error) {
+        console.error("重命名失败:", error);
+        return { success: false, error: "重命名失败" };
+    }
+}
+
 export async function uploadAndIndex(formData: FormData) {
     const file = formData.get("file") as File;
     const kbId = formData.get("kbId") as string;
@@ -133,12 +159,3 @@ export async function uploadAndIndex(formData: FormData) {
     }
 }
 
-export async function askQuestion(question: string) {
-    try {
-        const answer = await graphRagQuery(question);
-
-        return { answer };
-    } catch (error: any) {
-        return { error: error.message };
-    }
-}

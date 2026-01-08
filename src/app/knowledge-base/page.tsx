@@ -11,6 +11,7 @@ import {
 import { Plus, Database, FileText, ChevronRight, MoreVertical, Trash2, Edit3, AlertCircle } from "lucide-react";
 import { toast } from "react-hot-toast"; // 建议安装 react-hot-toast 处理提示
 import Sidebar from "../components/Sidebar";
+import { useSearchParams, useRouter } from "next/navigation";
 export default function KBPage() {
   const [kbs, setKbs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -19,10 +20,10 @@ export default function KBPage() {
   const [modalType, setModalType] = useState<"create" | "edit" | null>(null);
   const [currentKB, setCurrentKB] = useState<any>(null);
   const [formData, setFormData] = useState({ name: "", description: "" });
-
+  const router = useRouter();
   const loadData = async () => {
     setLoading(true);
-    await initDefaultKB();
+    // await initDefaultKB();
     const data = await getKnowledgeBases();
     setKbs(data);
     setLoading(false);
@@ -162,11 +163,20 @@ export default function KBPage() {
                 <div className="pt-5 border-t border-slate-100 flex items-center justify-between mt-auto">
                   <div className="flex items-center gap-4">
                     <span className="text-xs font-semibold text-slate-400 flex items-center gap-1.5">
-                      <FileText className="w-4 h-4 text-slate-300" /> 0 份文件
+                      <FileText className="w-4 h-4 text-slate-300" />
+                      {/* 0 份文件 */}
+                      {kb.fileCount || 0}份文件
                     </span>
                   </div>
 
-                  <button className="text-blue-600 text-sm font-bold flex items-center gap-1 group/btn">
+                  {/* <button className="text-blue-600 text-sm font-bold flex items-center gap-1 group/btn">
+                    进入库
+                    <ChevronRight className="w-4 h-4 transition-transform group-hover/btn:translate-x-1" />
+                  </button> */}
+                  <button
+                    onClick={() => router.push(`/knowledge-base/${kb._id}`)}
+                    className="text-blue-600 text-sm font-bold flex items-center gap-1 group/btn"
+                  >
                     进入库
                     <ChevronRight className="w-4 h-4 transition-transform group-hover/btn:translate-x-1" />
                   </button>

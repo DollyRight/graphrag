@@ -6,27 +6,131 @@ import { Milvus } from "@langchain/community/vectorstores/milvus";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { RunnableSequence } from "@langchain/core/runnables";
-
+import { connectDB, milvusClient } from "@/lib/client";
+import DocumentModel from "@/models/Documents"; // 确保导入名称不冲突
+import { DataType } from "@zilliz/milvus2-sdk-node";
 // --- A. 索引流程 (Indexing) ---
 
 export async function indexDocument(text: string, source: string, kbId: string, fileId: string) {
-
-  // 1. 文本切分
-  const splitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 1000,
-    chunkOverlap: 200,
-  });
-  const docs = await splitter.createDocuments([text], []);
-
-
-  // 2. 存入 Milvus (Vector 索引)
-
-  await Milvus.fromDocuments(docs, embeddings, milvusConfig);
+  await connectDB();
+  try {
+    // --- 更新 MongoDB 状态为正在索引 ---
+    await DocumentModel.findByIdAndUpdate(fileId, { status: "indexing" });
+    // 文本切分
+    const splitter = new RecursiveCharacterTextSplitter({
+      chunkSize: 1000,
+      chunkOverlap: 200,
+    });
+    const docs = await splitter.createDocuments([text], []);
 
 
 
-  // 手动构建一个 Prompt，要求返回纯 JSON
-  const prompt = ChatPromptTemplate.fromTemplate(`
+    // const dynamicConfig = {
+    //   ...milvusConfig,
+    //   collectionName: `kb_${kbId.toString()}`
+    // };
+
+    // await Milvus.fromDocuments(docs, embeddings, dynamicConfig);
+
+    // 2. 核心：构造符合 Schema 的 cleanedDocs
+    // const cleanedDocs = docs.map(doc => {
+    //   return new Document({
+    //     pageContent: doc.pageContent,
+    //     metadata: {
+    //       loc: JSON.stringify(doc.metadata?.loc || ""),
+    //       kbId: kbId.toString(),
+    //       fileId: fileId.toString(),
+    //     }
+    //   });
+    // });
+
+
+
+    // // 3. 明确指定 textField 和 vectorField
+    // const dynamicConfig = {
+    //   ...milvusConfig,
+    //   collectionName: `kb_${kbId.toString()}`,
+
+    // };
+
+
+    // await Milvus.fromDocuments(cleanedDocs, embeddings, dynamicConfig);
+
+
+
+    // const collectionName = `kb_${kbId}`;
+
+    // // 1. 获取向量。注意：embeddings.embedDocuments(texts) 返回的是 number[][]
+    // const texts = docs.map(d => d.pageContent);
+    // const allVectors: number[][] = await embeddings.embedDocuments(texts);
+
+    // // 2. 构造插入数据。确保每个字段的值类型与 Milvus DataType 严格对应
+    // const insertData = docs.map((doc, index) => {
+    //   return {
+    //     // 关键点：这里的 vector 必须是一个简单的 number[]
+    //     // 不要外层嵌套，也不要包装成对象
+    //     vector: allVectors[index],
+    //     text: doc.pageContent,
+    //     loc: JSON.stringify(doc.metadata?.loc || ""),
+    //     kbId: kbId.toString(),
+    //     fileId: fileId.toString()
+    //   };
+    // });
+
+    // // 3. 原生 SDK 插入
+    // const insertRes = await milvusClient.insert({
+    //   collection_name: collectionName,
+    //   data: insertData,
+    // });
+
+    // if (insertRes.status.error_code !== "Success" && insertRes.status.reason !== "") {
+    //   if (insertRes.status.reason.includes("num_rows")) {
+    //     console.log("尝试备选插入格式...");
+    //     await milvusClient.insert({
+    //       collection_name: collectionName,
+    //       fields_data: insertData
+    //     });
+    //   } else {
+    //     throw new Error(insertRes.status.reason);
+    //   }
+    // }
+
+    // console.log("✅ Milvus 数据存入成功");
+
+    const info = await milvusClient.describeCollection({ collection_name: `kb_${kbId}` });
+    console.log("数据库中真实的字段名:", info.schema.fields.map(f => f.name));
+    const collectionName = `kb_${kbId}`;
+    const texts = docs.map(d => d.pageContent);
+    const allVectors = await embeddings.embedDocuments(texts);
+
+    // 构造最纯粹的行数据数组
+    const insertData = docs.map((doc, index) => {
+      // 显式构造对象，严格对应你 describe 出来的字段名
+      return {
+        "vector": allVectors[index], // number[]
+        "text": String(doc.pageContent),
+        "loc": typeof doc.metadata?.loc === 'string' ? doc.metadata.loc : JSON.stringify(doc.metadata?.loc || ""),
+        "kbId": String(kbId),
+        "fileId": String(fileId)
+      };
+    });
+
+    console.log("即将尝试 Row 模式插入，第一行键名:", Object.keys(insertData[0]));
+
+    const insertRes = await milvusClient.insert({
+      collection_name: collectionName,
+      data: insertData, // 使用 data 而不是 fields_data
+    });
+
+    if (insertRes.status.error_code !== "Success") {
+      throw new Error(`Milvus Insert Error: ${insertRes.status.reason}`);
+    }
+    console.log(`✅ 列模式插入成功: ${docs.length} 条数据`);
+    await DocumentModel.findByIdAndUpdate(fileId, { status: "indexing" });
+
+
+    const graph = await initGraph();
+    const prompt = ChatPromptTemplate.fromTemplate(`
     你是一个知识图谱专家。请从以下文本中提取实体和它们之间的关系。
     输出格式必须是严格的 JSON 格式，包含 "nodes" 和 "relationships" 两个列表。
     
@@ -40,70 +144,62 @@ export async function indexDocument(text: string, source: string, kbId: string, 
     {input}
   `);
 
-  const chain = prompt.pipe(llm);
+    const chain = prompt.pipe(llm);
+    let hasNeo4jData = false;
 
-  const graph = await initGraph();
-  for (const doc of docs) {
-    try {
-      const res = await chain.invoke({ input: doc.pageContent });
-      const content = typeof res.content === 'string' ? res.content.replace(/```json|```/g, "").trim() : "";
-      const parsed = JSON.parse(content);
+    for (const doc of docs) {
+      try {
+        const res = await chain.invoke({ input: doc.pageContent });
+        const content = typeof res.content === 'string' ? res.content.replace(/```json|```/g, "").trim() : "";
+        const parsed = JSON.parse(content);
 
-      // 关键：构建符合 LangChain 定义的 GraphDocument
-      // const graphDocument = {
-      //   nodes: parsed.nodes.map((n: any) => ({
-      //     id: String(n.id), // 强制转为字符串
-      //     type: n.type || "Entity",
-      //     properties: {} // 先保持为空，避免嵌套属性报错
-      //   })),
-      //   relationships: parsed.relationships.map((r: any) => ({
-      //     source: { id: String(r.source), type: "Entity" },
-      //     target: { id: String(r.target), type: "Entity" },
-      //     type: r.type,
-      //     properties: {}
-      //   })),
-      //   source: doc
-      // };
-      const graphDocument = {
-        nodes: parsed.nodes.map((n: any) => ({
-          id: String(n.id),
-          type: n.type || "Entity",
-          properties: { kbId, fileId } // 注入 ID 方便以后查询和删除
-        })),
-        relationships: parsed.relationships.map((r: any) => ({
-          source: { id: String(r.source), type: "Entity" },
-          target: { id: String(r.target), type: "Entity" },
-          type: r.type,
-          properties: { kbId, fileId } // 注入 ID
-        })),
-        source: doc
-      };
+        const graphDocument = {
+          nodes: parsed.nodes.map((n: any) => ({
+            id: String(n.id),
+            type: n.type || "Entity",
+            properties: { kbId, fileId } // 注入 ID 方便以后查询和删除
+          })),
+          relationships: parsed.relationships.map((r: any) => ({
+            source: { id: String(r.source), type: "Entity" },
+            target: { id: String(r.target), type: "Entity" },
+            type: r.type,
+            properties: { kbId, fileId } // 注入 ID
+          })),
+          source: doc
+        };
 
-      await graph.addGraphDocuments([graphDocument as any], {});
-      console.log("✅ 成功存入一个区块到 Neo4j");
-    } catch (e) {
-      console.error("❌ 提取区块失败:", e);
+        await graph.addGraphDocuments([graphDocument as any], {});
+        hasNeo4jData = true;
+        console.log("✅ 成功存入一个区块到 Neo4j");
+      } catch (e) {
+        console.error("❌ 提取区块失败:", e);
+      }
     }
+
+    // --- 5. 索引完成，更新 MongoDB 最终状态 ---
+    await DocumentModel.findByIdAndUpdate(fileId, {
+      status: "completed",
+      neo4jStatus: hasNeo4jData // 如果存入了图谱数据，标记为 true
+    });
+    return { success: true, chunks: docs.length };
+  } catch (error) {
+    console.error("索引全流程失败:", error);
+    // 失败处理：更新 MongoDB 为失败状态
+    await DocumentModel.findByIdAndUpdate(fileId, { status: "failed" });
+    return { success: false, error: "索引失败" };
   }
-
-
-  return { success: true, chunks: docs.length };
 }
 
 
 
 // --- B. 检索与问答流程 (Retrieval & Generation) ---
-
-
-export async function graphRagQuery(question: string) {
+export async function graphRagQuery(question: string, collection_name: string) {
 
   const graph = await initGraph();
-  const vectorStore = await getVectorStore();
+  const vectorStore = await getVectorStore(collection_name);
 
   // 1. 向量检索 (非结构化搜索)
   const resultsWithScore = await vectorStore.similaritySearchWithScore(question, 3);
-  // console.log("resultsWithScore", resultsWithScore.length)
-  // console.log(resultsWithScore[0])
   // 过滤掉分值太低（即距离太远）的结果
   // 注意：阈值需要根据你的模型（OpenAI/阿里）反复调试，假设 0.4 是一个分水岭
   const vectorContext = resultsWithScore
@@ -111,7 +207,6 @@ export async function graphRagQuery(question: string) {
     .map(([doc, score]) => doc.pageContent)
     .join("\n\n");
 
-  // console.log("vectorContext", vectorContext.length)
 
   // 2. 图谱检索 (结构化搜索)
   // 这里使用简化的全文检索：先提取问题中的实体，再在图中查找相关三元组
@@ -148,7 +243,7 @@ export async function graphRagQuery(question: string) {
 
   console.log("提取到的图谱检索实体:", entities);
 
-  // 第二步：在 Neo4j 中执行 Cypher 查询
+  // 第二步：在 Neo4j 中执行 Cypher 查询~
   // 查找这些实体及其直接相连的关系（一阶邻居）
   let graphContext = "";
   try {
@@ -240,7 +335,7 @@ export async function graphRagQuery(question: string) {
 
   const prompt = ChatPromptTemplate.fromTemplate(template);
 
-  console.log("graphContext", graphContext)
+  console.log(graphContext)
   const chain = prompt.pipe(llm).pipe(new StringOutputParser());
   return await chain.stream({
     vector_context: vectorContext, // 修正为 vector_context   TODO: vector_context把需要的东西给filter了

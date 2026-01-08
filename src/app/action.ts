@@ -2,7 +2,7 @@
 
 import { indexDocument, graphRagQuery } from "@/lib/graph-rag";
 import pdf from "pdf-parse";
-import connectDB from "@/lib/client";
+import {connectDB} from "@/lib/client";
 import Document from "@/models/Documents";
 export async function uploadAndIndex(formData: FormData) {
   const file = formData.get("file") as File;
@@ -38,12 +38,3 @@ export async function uploadAndIndex(formData: FormData) {
   }
 }
 
-export async function askQuestion(question: string) {
-  try {
-    const answer = await graphRagQuery(question);
-
-    return { answer };
-  } catch (error: any) {
-    return { error: error.message };
-  }
-}
